@@ -1,0 +1,38 @@
+# Drop these two services into the compose file of your monitoring stack (the
+# one that runs Prometheus and Grafana), so deadman can reach them by service
+# name. Adjust the two hostnames in deadman.sh if yours differ.
+services:
+  docker-health-exporter:
+    image: python:3.13-alpine          # stdlib only: no image to build, nothing to pin
+    container_name: docker-health-exporter
+    command: ["python", "-u", "/exporter.py"]
+    environment:
+      # Names of the backup stamp files to report (see README, "Backup stamps").
+      # Leave empty to disable the backup_* metrics.
+      - BACKUP_STAMPS=dumps,volumes
+    volumes:
+      - ./docker-health-exporter/exporter.py:/exporter.py:ro
+      # Mounting docker.sock grants root-equivalent control of the daemon. `:ro`
+      # protects the socket file, NOT the API; the exporter only ever GETs, but
+      # that is behaviour, not enforcement. Put a docker-socket-proxy in front
+      # if that is not acceptable.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Optional: the directory your backup jobs write stamp files into.
+      - ./backups:/backups:ro
+    ports:
+      - 9060:9060
+    restart: unless-stopped
+
+  deadman:
+    # curlimages/curl rather than alpine: alpine ships no curl, and `apk add` at
+    # runtime would make every heartbeat depend on package-repo availability.
+    image: curlimages/curl:latest
+    container_name: deadman
+    entrypoint: ["sh", "/deadman.sh"]
+    environment:
+      - HC_PING_URL=${HC_PING_URL}     # healthchecks.io ping URL, from .env
+      - CHECK_INTERVAL=300
+      - FAIL_THRESHOLD=3
+    volumes:
+      - ./deadman/deadman.sh:/deadman.sh:ro
+    restart: unless-stopped

@@ -1,0 +1,4 @@
+scrape_configs:
+  - job_name: docker-health
+    static_configs:
+      - targets: ["docker-health-exporter:9060"]
