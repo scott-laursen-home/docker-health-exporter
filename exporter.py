@@ -29,6 +29,7 @@ Exposes on :9060/metrics
                                               differs from / is missing from
                                               ~/docker/launchd (-1: never checked)
   launchd_check_timestamp_seconds              unix time of the last drift check
+  + anything in TEXTFILE_DIR/*.prom             passed through verbatim (see below)
 
 Backup freshness lives here rather than in its own exporter to avoid a second
 container, port and scrape job for two gauges. The stamps are written by
@@ -38,6 +39,14 @@ WHY a missing stamp reports timestamp 0 instead of being absent: an alert that
 cannot fire when the job has NEVER run is exactly the blind spot that let the
 old rsync backup fail 60 nights unnoticed. 0 makes the age astronomical, so the
 same "too old" rule catches "never ran" without a second rule.
+
+Textfile collector: any host job can drop a `<name>.prom` file (Prometheus
+text format, HELP/TYPE lines included) into TEXTFILE_DIR and it is appended
+to the output as-is -- the same contract as node_exporter's textfile
+collector. This is how one-shot jobs (a backup's repository size, say) get a
+gauge without a second exporter. Unset by default; a file that fails to read
+is skipped, never fatal. Write the file atomically (write to a temp name,
+then rename) so a scrape cannot see a half-written file.
 """
 
 import http.client
@@ -59,6 +68,8 @@ CACHE_TTL = float(os.environ.get("CACHE_TTL_SECONDS", "10"))
 # never appears still produces a metric.
 BACKUP_STAMP_DIR = os.environ.get("BACKUP_STAMP_DIR", "/backups")
 BACKUP_STAMPS = [s for s in os.environ.get("BACKUP_STAMPS", "dumps,volumes").split(",") if s]
+# Directory of *.prom files appended verbatim to the output; empty = off.
+TEXTFILE_DIR = os.environ.get("TEXTFILE_DIR", "")
 HEALTH_STATES = ("healthy", "unhealthy", "starting", "none")
 
 
@@ -152,6 +163,28 @@ def collect_launchd():
         return -1, 0.0
 
 
+def collect_textfiles():
+    """Contents of TEXTFILE_DIR/*.prom, sorted by name, each ending in exactly
+    one newline. Unreadable files are skipped so a bad drop-in cannot blank
+    the rest of the endpoint."""
+    if not TEXTFILE_DIR:
+        return []
+    out = []
+    try:
+        names = sorted(n for n in os.listdir(TEXTFILE_DIR) if n.endswith(".prom"))
+    except Exception:
+        return out
+    for name in names:
+        try:
+            with open(os.path.join(TEXTFILE_DIR, name)) as fh:
+                text = fh.read().strip()
+            if text:
+                out.append(text)
+        except Exception:
+            continue
+    return out
+
+
 def collect():
     """Return the Prometheus text exposition for all containers."""
     health = []
@@ -241,6 +274,7 @@ def collect():
         "# HELP launchd_check_timestamp_seconds Unix time of the last launchd drift check (0 = never).",
         "# TYPE launchd_check_timestamp_seconds gauge",
         "launchd_check_timestamp_seconds {:.0f}".format(launchd_ts),
+        *collect_textfiles(),
     ]
     return "\n".join(out) + "\n"
 

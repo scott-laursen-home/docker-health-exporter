@@ -66,6 +66,16 @@ Reads `/backups/.launchd-drift` (`"<count> <unixtime>"`) if present. Written
 by a nightly check that compares versioned launchd plists against the
 installed copies. Ignore it if you are not on macOS.
 
+### Textfile collector (optional)
+
+Set `TEXTFILE_DIR` to a directory (mounted read-only) and every `*.prom` file
+in it is appended to the output verbatim, the same contract as node_exporter's
+textfile collector. Use it for one-shot host jobs that have a number to report
+but no process to scrape -- a backup job writing its repository size, for
+example. Include `# HELP` / `# TYPE` lines, and write the file atomically
+(temp name, then `mv`) so a scrape never sees half a file. Unreadable files
+are skipped, never fatal.
+
 ## Alert rules that work
 
 PromQL as used with Grafana alerting; thresholds in parentheses.
